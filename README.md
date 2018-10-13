@@ -1,12 +1,12 @@
-#Batch Matrix Multiplication CUDA Kernel
+# Batch Matrix Multiplication CUDA Kernel
 desc.
 
-#Theory
+# Theory
 desc.
 
-#Performance
+# Performance
 desc.
 
-#Credit
+# Credit
 desc.
 
