@@ -4,7 +4,7 @@
  Author      : salehjg
  Version     :
  Copyright   : 
- Description : CUDA compute reciprocals
+ Description :
  ============================================================================
  */
 
@@ -76,8 +76,15 @@ __global__ void kernel_batched_matmul(
 		int dim1C, int dim2C){
 	extern __shared__ float smem[];
 
-	const unsigned int len_subA = BLOCK_SIZE * dim2A, len_subB = BLOCK_SIZE * dim1B; //len of sub matrices of A and B.
-	const unsigned long len_A = dim0*dim1A*dim2A, len_B = dim0*dim1B*dim2B;
+	const unsigned int len_subA = BLOCK_SIZE * dim2A,len_subB = BLOCK_SIZE * dim1B; //len of sub matrices of A and B.
+	const unsigned long
+		len_A = dim0*dim1A*dim2A,
+		len_B = dim0*dim1B*dim2B,
+		len_C = dim0*dim1C*dim2C;
+	const unsigned long
+		len_A_signleBatch = dim1A*dim2A,
+		len_B_signleBatch = dim1B*dim2B,
+		len_C_signleBatch = dim1C*dim2C;
 	const unsigned int BLOCKSIZE_P2 = BLOCK_SIZE*BLOCK_SIZE;
 
 	//smemA = smem + 0;
@@ -85,8 +92,9 @@ __global__ void kernel_batched_matmul(
 
 
     // Block index
-    unsigned int bx = blockIdx.x;
-    unsigned int  by = blockIdx.y;
+    unsigned int bx = blockIdx.x; // mapped to the sub-matrices of output
+    unsigned int by = blockIdx.y; // mapped to the sub-matrices of output
+    unsigned int bz = blockIdx.z; // batch index
 
     // Thread index
     unsigned int  tx = threadIdx.x;
@@ -116,7 +124,7 @@ __global__ void kernel_batched_matmul(
 	while(idxA < len_subA){//Block-stride loop
 		gidx1 = offsetA + idxA;
 		if(idxA < len_subA && gidx1 < len_A) {
-			smem[idxA] = matA[gidx1];
+			smem[idxA] = matA[bz * len_A_signleBatch + gidx1];
 			printf("bx:%u, by:%u, tx:%u, ty:%u ,idxA:%ld, gidx1:%ld\n",bx,by,tx,ty,idxA,gidx1);
 		}else{
 			smem[idxA] = 0;
@@ -131,8 +139,8 @@ __global__ void kernel_batched_matmul(
 		_d2 = idxB%BLOCK_SIZE;
 		_d1 = (idxB/BLOCK_SIZE);
 		gidx2 = offsetB + _d1*dim2B + _d2;
-		if(idxB < len_subB && gidx2 < len_B && _d1<dim1B && _d2<dim2B){
-			smem[len_subA+idxB] = matB[gidx2];
+		if(idxB < len_subB && _d1<dim1B && _d2<dim2B){
+			smem[len_subA+idxB] = matB[bz * len_B_signleBatch +gidx2];
 			printf("* bx:%u, by:%u ,tx:%u, ty:%u ,idxB:%ld, _d1:%d, _d2:%d, gidx2:%ld\n",bx,by,tx,ty,idxB,_d1,_d2,gidx2);
 		}else{
 			smem[len_subA+idxB] = 0;
@@ -157,14 +165,14 @@ __global__ void kernel_batched_matmul(
     	//dim2A=dim1B is common equal dimension of 2 matrices  --- block-stride loop
     	for (int k = 0; k < dim2A; k++) {
     		output_element += smem[ty*dim2A+k] * smem[len_subA+ k*BLOCK_SIZE+tx];
-    		printf("### c_pos_x:%d, c_pos_y:%d, smem[%d]=%f, smem[%d]=%f\n",
-    				c_pos_x,c_pos_y,
+    		printf("###bz:%d, c_pos_x:%d, c_pos_y:%d, smem[%d]=%f, smem[%d]=%f\n",
+    				bz,c_pos_x,c_pos_y,
     				ty*dim2A+k,smem[ty*dim2A+k],
     				len_subA+ k*BLOCK_SIZE+tx,smem[len_subA+ k*BLOCK_SIZE+tx]);
     	}
 
     	///TODO: Check matC index to not to exceed the len of matC!
-    	matC[c_pos_y*dim2C + c_pos_x] = output_element;
+    	matC[bz * len_C_signleBatch + c_pos_y*dim2C + c_pos_x] = output_element;
 
     }
 
@@ -183,13 +191,14 @@ void batched_matmul(
 
 	const int BLOCK_DIM = 8;
 	dim3 blocksize(BLOCK_DIM,BLOCK_DIM,1);
-	dim3 gridsize(0,0,1);
+	dim3 gridsize(0,0,0);
 	gridsize.x = (dim2B + BLOCK_DIM-1)/BLOCK_DIM;
 	gridsize.y = (dim1A + BLOCK_DIM-1)/BLOCK_DIM;
+	gridsize.z = (dim0A);
 	unsigned long sharedmemsize = (BLOCK_DIM*dim2A + BLOCK_DIM* dim1B)*sizeof(float);
 	printf("@batched_matmul:\n");
 	printf("\tBLOCK:(%d, %d)\n",blocksize.x,blocksize.y);
-	printf("\t GRID:(%d, %d)\n",gridsize.x,gridsize.y);
+	printf("\t GRID:(%d, %d, %d)\n",gridsize.x,gridsize.y,gridsize.z);
 
 	if(BLOCK_DIM==8){
 		kernel_batched_matmul<8> <<<gridsize, blocksize, sharedmemsize>>>(
@@ -309,7 +318,7 @@ int MatrixMultiply(int dim0, int dim1A, int dim2A, int dim1B, int dim2B) {
     float *d_A, *d_B, *d_C;
 
     // Allocate host matrix C
-    unsigned int size_C = dim1A * dim2B;
+    unsigned int size_C = dim0 * dim1A * dim2B;
     unsigned int mem_size_C = size_C * sizeof(float);
     float *h_C = reinterpret_cast<float *>(malloc(mem_size_C));
     float *host_results = LA_MatMul(h_A, h_B,dim0,3, dim1A,dim2A, dim1B,dim2B);
@@ -429,7 +438,7 @@ int main(int argc, char **argv) {
 
     // MatC = MatA * MatB
     // Everything is row-major, so dim2 is width of matrix and dim1 is height of it.
-    int batchsize = 1;
+    int batchsize = 2;
     int dim1A = 8;       	int dim2A = 2;
     int dim1B = 2;       	int dim2B = 8;
 
