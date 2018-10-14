@@ -77,6 +77,7 @@ __global__ void kernel_batched_matmul(
 	extern __shared__ float smem[];
 
 	const unsigned int len_subA = BLOCK_SIZE * dim2A, len_subB = BLOCK_SIZE * dim1B; //len of sub matrices of A and B.
+	const unsigned long len_A = dim0*dim1A*dim2A, len_B = dim0*dim1B*dim2B;
 	const unsigned int BLOCKSIZE_P2 = BLOCK_SIZE*BLOCK_SIZE;
 
 	//smemA = smem + 0;
@@ -84,57 +85,82 @@ __global__ void kernel_batched_matmul(
 
 
     // Block index
-    int bx = blockIdx.x;
-    int by = blockIdx.y;
+    unsigned int bx = blockIdx.x;
+    unsigned int  by = blockIdx.y;
 
     // Thread index
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
+    unsigned int  tx = threadIdx.x;
+    unsigned int  ty = threadIdx.y;
 
-    int c_pos_x, c_pos_y;
+    unsigned int  c_pos_x, c_pos_y;
     c_pos_x = bx*BLOCK_SIZE + tx;
     c_pos_y = by*BLOCK_SIZE + ty;
 
-    if(c_pos_x<dim2C && c_pos_y<dim1C){
-    	unsigned long offsetA = (by * BLOCK_SIZE) * dim2A;
-    	unsigned long offsetB = (bx * BLOCK_SIZE); //first row (d1=0)
+    unsigned long gidx1,gidx2;
+    unsigned int _d1,_d2;
 
-    	// Load sub matrices from global memory into shared memory
-
-    	unsigned long idxA, idxB;
-    	idxA = ty* BLOCK_SIZE + tx;
-    	idxB = ty* BLOCK_SIZE + tx;
-
-    	while(idxA < len_subA){//Block-stride loop
-    		if(idxA < len_subA) smem[idxA] = matA[offsetA + idxA];
-    		idxA += BLOCKSIZE_P2;
-    	}
-
-    	///TODO: It might be better to store transposed subMatB in shared memory to avoid shared memory read conflict.
-    	///      But then we might get shared memory write conflict. (?)
-    	while(idxB < len_subB ){//Block-stride loop
-    		if(idxB < len_subB ) smem[len_subA+idxB] = matB[offsetB + (bx*BLOCK_SIZE)*dim2B + (idxB % dim2B)];
-    		idxB += BLOCKSIZE_P2;
-    	}
+    //printf("## bx:%u, by:%u, tx:%u, ty:%u, c_pos_x:%u, c_pos_y:%u\n",bx,by,tx,ty,c_pos_x,c_pos_y);
 
 
+	unsigned long offsetA = (by * BLOCK_SIZE) * dim2A;
+	unsigned long offsetB = (bx * BLOCK_SIZE); //first row (d1=0)
+
+	// Load sub matrices from global memory into shared memory
+
+	unsigned long idxA, idxB;
+	idxA = ty* BLOCK_SIZE + tx;
+	idxB = ty* BLOCK_SIZE + tx;
+
+	//printf("*** bx:%u, by:%u, tx:%u, ty:%u ,idxA:%ld, idxB:%ld\n",bx,by,tx,ty,idxA,idxB);
+
+	while(idxA < len_subA){//Block-stride loop
+		gidx1 = offsetA + idxA;
+		if(idxA < len_subA && gidx1 < len_A) {
+			smem[idxA] = matA[gidx1];
+			printf("bx:%u, by:%u, tx:%u, ty:%u ,idxA:%ld, gidx1:%ld\n",bx,by,tx,ty,idxA,gidx1);
+		}else{
+			smem[idxA] = 0;
+		}
+		idxA += BLOCKSIZE_P2;
+	}
+
+	///TODO: It might be better to store transposed subMatB in shared memory to avoid shared memory read conflict.
+	///      But then we might get shared memory write conflict. (?)
+	while(idxB < len_subB ){//Block-stride loop
+		//gidx2 = offsetB + (bx*BLOCK_SIZE)*dim2B + (idxB % dim2B);
+		_d2 = idxB%BLOCK_SIZE;
+		_d1 = (idxB/BLOCK_SIZE);
+		gidx2 = offsetB + _d1*dim2B + _d2;
+		if(idxB < len_subB && gidx2 < len_B && _d1<dim1B && _d2<dim2B){
+			smem[len_subA+idxB] = matB[gidx2];
+			printf("* bx:%u, by:%u ,tx:%u, ty:%u ,idxB:%ld, _d1:%d, _d2:%d, gidx2:%ld\n",bx,by,tx,ty,idxB,_d1,_d2,gidx2);
+		}else{
+			smem[len_subA+idxB] = 0;
+		}
+		idxB += BLOCKSIZE_P2;
+	}
 
 
 
-    	__syncthreads();
+
+
+	__syncthreads();
 
 
 
 
     	// Multiply and add each result to produce output element of current thread in the thread block.
-
+    if(c_pos_x<dim2C && c_pos_y<dim1C){
     	unsigned long idx = ty* BLOCK_SIZE + tx;
     	float output_element = 0.0f;
 
     	//dim2A=dim1B is common equal dimension of 2 matrices  --- block-stride loop
-    	///TODO: Implement parallel reduction for big dim2A.
     	for (int k = 0; k < dim2A; k++) {
-    		output_element += smem[ty*dim2A+tx] * smem[len_subA+ ty*BLOCK_SIZE+tx];
+    		output_element += smem[ty*dim2A+k] * smem[len_subA+ k*BLOCK_SIZE+tx];
+    		printf("### c_pos_x:%d, c_pos_y:%d, smem[%d]=%f, smem[%d]=%f\n",
+    				c_pos_x,c_pos_y,
+    				ty*dim2A+k,smem[ty*dim2A+k],
+    				len_subA+ k*BLOCK_SIZE+tx,smem[len_subA+ k*BLOCK_SIZE+tx]);
     	}
 
     	///TODO: Check matC index to not to exceed the len of matC!
@@ -155,7 +181,7 @@ void batched_matmul(
 	if(dim2A != dim1B){printf("ERR@batched_matmul: BAD SHAPE.\n"); return;}
 	if(dim0B != dim0A){printf("ERR@batched_matmul: BAD BATCH SIZES.\n"); return;}
 
-	const int BLOCK_DIM = 32;
+	const int BLOCK_DIM = 8;
 	dim3 blocksize(BLOCK_DIM,BLOCK_DIM,1);
 	dim3 gridsize(0,0,1);
 	gridsize.x = (dim2B + BLOCK_DIM-1)/BLOCK_DIM;
@@ -165,8 +191,8 @@ void batched_matmul(
 	printf("\tBLOCK:(%d, %d)\n",blocksize.x,blocksize.y);
 	printf("\t GRID:(%d, %d)\n",gridsize.x,gridsize.y);
 
-	if(BLOCK_DIM==32){
-		kernel_batched_matmul<32> <<<gridsize, blocksize, sharedmemsize>>>(
+	if(BLOCK_DIM==8){
+		kernel_batched_matmul<8> <<<gridsize, blocksize, sharedmemsize>>>(
 				matA,
 				matB,
 				matC,
@@ -404,8 +430,8 @@ int main(int argc, char **argv) {
     // MatC = MatA * MatB
     // Everything is row-major, so dim2 is width of matrix and dim1 is height of it.
     int batchsize = 1;
-    int dim1A = 32 ;       	int dim2A = 32;
-    int dim1B = 32;       	int dim2B = 32;
+    int dim1A = 8;       	int dim2A = 2;
+    int dim1B = 2;       	int dim2B = 8;
 
     printf("MatrixA(dim0:%d, dim1: %d, dim2:%d)\nMatrixB(dim0:%d, dim1: %d, dim2:%d)\n", batchsize,dim1A,dim2A,batchsize,dim1B,dim2B);
 
