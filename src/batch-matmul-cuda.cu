@@ -125,7 +125,7 @@ __global__ void kernel_batched_matmul(
 		gidx1 = offsetA + idxA;
 		if(idxA < len_subA && gidx1 < len_A) {
 			smem[idxA] = matA[bz * len_A_signleBatch + gidx1];
-			printf("bx:%u, by:%u, tx:%u, ty:%u ,idxA:%ld, gidx1:%ld\n",bx,by,tx,ty,idxA,gidx1);
+			/*printf("bx:%u, by:%u, tx:%u, ty:%u ,idxA:%ld, gidx1:%ld\n",bx,by,tx,ty,idxA,gidx1);*/
 		}else{
 			smem[idxA] = 0;
 		}
@@ -141,7 +141,7 @@ __global__ void kernel_batched_matmul(
 		gidx2 = offsetB + _d1*dim2B + _d2;
 		if(idxB < len_subB && _d1<dim1B && _d2<dim2B){
 			smem[len_subA+idxB] = matB[bz * len_B_signleBatch +gidx2];
-			printf("* bx:%u, by:%u ,tx:%u, ty:%u ,idxB:%ld, _d1:%d, _d2:%d, gidx2:%ld\n",bx,by,tx,ty,idxB,_d1,_d2,gidx2);
+			/*printf("* bx:%u, by:%u ,tx:%u, ty:%u ,idxB:%ld, _d1:%d, _d2:%d, gidx2:%ld\n",bx,by,tx,ty,idxB,_d1,_d2,gidx2);*/
 		}else{
 			smem[len_subA+idxB] = 0;
 		}
@@ -165,10 +165,10 @@ __global__ void kernel_batched_matmul(
     	//dim2A=dim1B is common equal dimension of 2 matrices  --- block-stride loop
     	for (int k = 0; k < dim2A; k++) {
     		output_element += smem[ty*dim2A+k] * smem[len_subA+ k*BLOCK_SIZE+tx];
-    		printf("###bz:%d, c_pos_x:%d, c_pos_y:%d, smem[%d]=%f, smem[%d]=%f\n",
+    		/*printf("###bz:%d, c_pos_x:%d, c_pos_y:%d, smem[%d]=%f, smem[%d]=%f\n",
     				bz,c_pos_x,c_pos_y,
     				ty*dim2A+k,smem[ty*dim2A+k],
-    				len_subA+ k*BLOCK_SIZE+tx,smem[len_subA+ k*BLOCK_SIZE+tx]);
+    				len_subA+ k*BLOCK_SIZE+tx,smem[len_subA+ k*BLOCK_SIZE+tx]);*/
     	}
 
     	///TODO: Check matC index to not to exceed the len of matC!
@@ -189,7 +189,7 @@ void batched_matmul(
 	if(dim2A != dim1B){printf("ERR@batched_matmul: BAD SHAPE.\n"); return;}
 	if(dim0B != dim0A){printf("ERR@batched_matmul: BAD BATCH SIZES.\n"); return;}
 
-	const int BLOCK_DIM = 8;
+	const int BLOCK_DIM = 6;
 	dim3 blocksize(BLOCK_DIM,BLOCK_DIM,1);
 	dim3 gridsize(0,0,0);
 	gridsize.x = (dim2B + BLOCK_DIM-1)/BLOCK_DIM;
@@ -199,9 +199,10 @@ void batched_matmul(
 	printf("@batched_matmul:\n");
 	printf("\tBLOCK:(%d, %d)\n",blocksize.x,blocksize.y);
 	printf("\t GRID:(%d, %d, %d)\n",gridsize.x,gridsize.y,gridsize.z);
+	printf("\t SHARED: %d Bytes\n",sharedmemsize);
 
-	if(BLOCK_DIM==8){
-		kernel_batched_matmul<8> <<<gridsize, blocksize, sharedmemsize>>>(
+	if(BLOCK_DIM==6){
+		kernel_batched_matmul<6> <<<gridsize, blocksize, sharedmemsize>>>(
 				matA,
 				matB,
 				matC,
@@ -438,9 +439,9 @@ int main(int argc, char **argv) {
 
     // MatC = MatA * MatB
     // Everything is row-major, so dim2 is width of matrix and dim1 is height of it.
-    int batchsize = 2;
-    int dim1A = 8;       	int dim2A = 2;
-    int dim1B = 2;       	int dim2B = 8;
+    int batchsize = 100;
+    int dim1A = 64;       	int dim2A = 1024;
+    int dim1B = 1024;       	int dim2B = 64;
 
     printf("MatrixA(dim0:%d, dim1: %d, dim2:%d)\nMatrixB(dim0:%d, dim1: %d, dim2:%d)\n", batchsize,dim1A,dim2A,batchsize,dim1B,dim2B);
 
